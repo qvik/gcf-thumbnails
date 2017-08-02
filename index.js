@@ -12,6 +12,9 @@ const uuidv4 = require('uuid/v4');
 // 'Pixel budget' denotes the maximum amount of pixels in the thumbnail
 const PIXEL_BUDGET = 50 * 50;
 
+// Our output bucket
+const OUTPUT_BUCKET = 'qvik-gcf-thumbnails-output';
+
 // convert example:
 // `convert`, [`-define`, `jpeg:size=600x400`, tempLocalFile, `-thumbnail`,
 // `600x400^`, `-gravity`, `center`, `-extent`, `600x400`, tempLocalThumbFileMedium]
@@ -19,7 +22,9 @@ const PIXEL_BUDGET = 50 * 50;
 // image size:
 // convert larvi.jpg -ping -format "%w x %h" info:
 
-function thumbnailize(imageFilePath, width, height) {
+function thumbnailize(originalFileName, imageFilePath, width, height) {
+  console.log('originalFileName=', originalFileName);
+
   return new Promise((resolve, reject) => {
     // Calculate the size of the thumbnail
     const origPixels = width * height;
@@ -47,17 +52,33 @@ function thumbnailize(imageFilePath, width, height) {
 
       //TODO 1. downscale 2. blur 3. extract JPEG data 4. store to output bucket
 
+      // Write the file to the output bucket
+      const bucket = gcs.bucket(OUTPUT_BUCKET);
+     // const thumbFilePath = path.join(path.dirname(filePath), thumbFileName);
+      const contentType = 'image/jpeg'; //TODO
 
-      // All done
-      resolve();
+      const uploadOptions = {
+        destination: originalFileName,
+        metadata: {contentType: contentType}
+      };
+
+      bucket.upload(imageFilePath, uploadOptions, (err) => {
+          if (err) {
+            return reject(err);
+          }
+
+          console.log('File written to output bucket');
+
+          // All done
+          console.log("All done!");
+          resolve();
+        })
     });
-
-
   });
 };
 
 function processFile(file) {
-  console.log('Processing input file: ', file.name);
+  console.log('Processing input file:', file.name);
 // const tempLocalFilename = `/tmp/${path.parse(file.name).base}`;
 
   return new Promise((resolve, reject) => {
@@ -83,7 +104,7 @@ function processFile(file) {
           // console.log("Image features: ", features);
           // { format: 'JPEG', width: 3904, height: 2622, depth: 8 }
 
-          return thumbnailize(tempLocalFilename, features.width,
+          return thumbnailize(file.name, tempLocalFilename, features.width,
             features.height);
         });
       });
@@ -98,6 +119,7 @@ function processFile(file) {
  */
 exports.thumbnails = function (event, callback) {
   const object = event.data;
+  console.log('object', object);
 
   if (object.resourceState === 'not_exists') {
     console.log(`File ${object.name} deleted.`);
