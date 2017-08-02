@@ -15,15 +15,49 @@ const PIXEL_BUDGET = 50 * 50;
 // Our output bucket
 const OUTPUT_BUCKET = 'qvik-gcf-thumbnails-output';
 
-// convert example:
-// `convert`, [`-define`, `jpeg:size=600x400`, tempLocalFile, `-thumbnail`,
-// `600x400^`, `-gravity`, `center`, `-extent`, `600x400`, tempLocalThumbFileMedium]
+/**
+ * Uploads a local file into a GCS bucket.
+ *
+ * @param srcFilePath
+ * @param dstFilePath
+ * @param contentType
+ * @returns {Promise}
+ */
+function uploadFile(srcFilePath, dstFilePath, contentType) {
+  console.log('uploading file to', dstFilePath);
 
-// image size:
-// convert larvi.jpg -ping -format "%w x %h" info:
+  return new Promise((resolve, reject) => {
+    // Write the file to the output bucket
+    const bucket = gcs.bucket(OUTPUT_BUCKET);
+    // const thumbFilePath = path.join(path.dirname(filePath), thumbFileName);
 
-function thumbnailize(originalFileName, imageFilePath, width, height) {
-  console.log('originalFileName=', originalFileName);
+    const uploadOptions = {
+      destination: dstFilePath,
+      metadata: {contentType: contentType}
+    };
+
+    bucket.upload(srcFilePath, uploadOptions, (err) => {
+      if (err) {
+        return reject(err);
+      }
+
+      console.log('File written to output bucket OK!');
+
+      resolve();
+    });
+  });
+}
+
+/**
+ * Resizes the image to a JPEG thumbnail that fits in the 'pixel budget'.
+ *
+ * @param imageFilePath
+ * @param width
+ * @param height
+ * @returns {Promise}
+ */
+function downscaleImage(imageFilePath, width, height) {
+  console.log('Downscaling image: ', imageFilePath);
 
   return new Promise((resolve, reject) => {
     // Calculate the size of the thumbnail
@@ -46,35 +80,59 @@ function thumbnailize(originalFileName, imageFilePath, width, height) {
         return reject(err);
       }
 
-      console.log('Image resized OK!');
-
-      //TODO next step
-
-      //TODO 1. downscale 2. blur 3. extract JPEG data 4. store to output bucket
-
-      // Write the file to the output bucket
-      const bucket = gcs.bucket(OUTPUT_BUCKET);
-     // const thumbFilePath = path.join(path.dirname(filePath), thumbFileName);
-      const contentType = 'image/jpeg'; //TODO
-
-      const uploadOptions = {
-        destination: originalFileName,
-        metadata: {contentType: contentType}
-      };
-
-      bucket.upload(imageFilePath, uploadOptions, (err) => {
-          if (err) {
-            return reject(err);
-          }
-
-          console.log('File written to output bucket');
-
-          // All done
-          console.log("All done!");
-          resolve();
-        })
+      resolve();
     });
   });
+}
+
+/**
+ * Blurs the given image.
+ *
+ * @param imageFilePath
+ * @returns {Promise}
+ */
+function blurImage(imageFilePath) {
+  console.log('blurring image: ', imageFilePath);
+
+  return new Promise((resolve, reject) => {
+    //convert ${tempLocalFilename} -channel RGBA -blur 0x24 ${tempLocalFilename}
+    im.convert([imageFilePath, '-gaussian-blur', 5, imageFilePath], (err) => {
+        if (err) {
+          return reject(err);
+        }
+
+        console.log('Image blurred OK!');
+
+        resolve();
+      });
+  });
+}
+
+// convert example:
+// `convert`, [`-define`, `jpeg:size=600x400`, tempLocalFile, `-thumbnail`,
+// `600x400^`, `-gravity`, `center`, `-extent`, `600x400`, tempLocalThumbFileMedium]
+
+// image size:
+// convert larvi.jpg -ping -format "%w x %h" info:
+
+function thumbnailize(originalFileName, imageFilePath, width, height) {
+  console.log('originalFileName=', originalFileName);
+
+  return downscaleImage(imageFilePath, width, height)
+    .then(() => {
+      console.log('at then() after downscaleImage()');
+
+      //TODO remove, this is just debug
+      uploadFile(imageFilePath, originalFileName, 'image/jpeg');
+
+      return blurImage(imageFilePath);
+    })
+    .then(() => {
+      console.log('at then() after blurImage');
+
+      //TODO remove, this is just debug
+      return uploadFile(imageFilePath, 'blurred-' + originalFileName, 'image/jpeg');
+    });
 };
 
 function processFile(file) {
@@ -101,11 +159,16 @@ function processFile(file) {
             return reject(err);
           }
 
-          // console.log("Image features: ", features);
-          // { format: 'JPEG', width: 3904, height: 2622, depth: 8 }
-
-          return thumbnailize(file.name, tempLocalFilename, features.width,
-            features.height);
+          thumbnailize(file.name, tempLocalFilename, features.width,
+            features.height)
+            .then(() => {
+              console.log('thumbnailize() OK!');
+              resolve();
+            })
+            .catch((err) => {
+              console.log('thumbnailize() failed', err);
+              reject(err);
+            })
         });
       });
   });
@@ -131,7 +194,7 @@ exports.thumbnails = function (event, callback) {
 
     const file = gcs.bucket(object.bucket).file(object.name);
 
-    processFile(file, callback)
+    processFile(file)
       .then(() => {
         console.log('processFile() completed.');
         callback();
