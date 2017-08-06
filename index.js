@@ -15,21 +15,23 @@ const OUTPUT_BUCKET = 'qvik-gcf-thumbnails-output';
 /**
  * Uploads a local file into a GCS bucket.
  *
- * @param srcFilePath
- * @param dstFilePath
- * @param contentType
+ * @param srcFilePath Local filesystem path of the file to upload
+ * @param dstFilePath Path of the destination file in the bucket
+ * @param contentType MIME type of the file
+ * @param metadata user-provided metadata in key-value pairs
  * @returns {Promise}
  */
-function uploadFile(srcFilePath, dstFilePath, contentType) {
+function uploadFile(srcFilePath, dstFilePath, contentType, metadata) {
   console.log('uploading file to', dstFilePath);
 
   return new Promise((resolve, reject) => {
-    // Write the file to the output bucket
     const bucket = gcs.bucket(OUTPUT_BUCKET);
-
     const uploadOptions = {
       destination: dstFilePath,
-      metadata: {contentType: contentType}
+      metadata: {
+        contentType: contentType,
+        metadata: metadata
+      }
     };
 
     bucket.upload(srcFilePath, uploadOptions, (err) => {
@@ -185,7 +187,7 @@ function extractThumbData(imageFilePath, width, height) {
  * @param thumbData
  * @returns {Promise}
  */
-function storeThumbData(originalFileName, thumbData) {
+function storeThumbData(originalFileName, thumbData, originalMetadata) {
   console.log(`Storing ${thumbData.length} bytes of thumbnail data`);
 
   return new Promise((resolve, reject) => {
@@ -205,8 +207,21 @@ function storeThumbData(originalFileName, thumbData) {
 
       console.log('Thumb data written into a file OK!');
 
+      // Create our set of metadata
+      const metadata = {
+        dominantColor: '##TODO##' //TODO replace by real value
+      };
+
+      // Merge in the original file's metadata
+      Object.assign(metadata, originalMetadata);
+
+      console.log(`Merged metadata for new file: ${metadata}`);
+
+      //TODO cant we do this in a smarter manner instead of this clumsy way?
+
       // Upload the thumb data to the output bucket
-      uploadFile(tempDataFilename, originalFileName + ".thumbdata")
+      uploadFile(tempDataFilename, originalFileName + ".thumbdata",
+        "application/octet-stream", metadata)
         .then(() => {
           resolve();
         })
@@ -222,17 +237,18 @@ function storeThumbData(originalFileName, thumbData) {
  *
  * @param originalFileName
  * @param imageFilePath
- * @param width
- * @param height
- * @returns {Promise.<TResult>}
+ * @param dimensions
+ * @param originalMetadata
+ * @returns {Promise}
  */
-function thumbnailize(originalFileName, imageFilePath, width, height) {
-  console.log('originalFileName=', originalFileName);
+function thumbnailize(originalFileName, imageFilePath,
+                      dimensions, originalMetadata) {
+  //console.log('originalFileName=', originalFileName);
 
   let thumbWidth = null;
   let thumbHeight = null;
 
-  return downscaleImage(imageFilePath, width, height)
+  return downscaleImage(imageFilePath, dimensions.width, dimensions.height)
     .then((result) => {
       console.log('at then() after downscaleImage()');
 
@@ -255,7 +271,7 @@ function thumbnailize(originalFileName, imageFilePath, width, height) {
     .then((thumbData) => {
       console.log('at then() after extractThumbData()');
 
-      return storeThumbData(originalFileName, thumbData);
+      return storeThumbData(originalFileName, thumbData, originalMetadata);
     });
 };
 
@@ -289,15 +305,16 @@ function processFile(file) {
   return new Promise((resolve, reject) => {
     // Form a local path for the file
     const tempLocalFilename = `/tmp/${uuidv4()}`;
+    let originalMetadata = null;
 
     // Download file from bucket.
     file.download({destination: tempLocalFilename})
-      .catch((err) => {
-        console.error('Failed to download file.', err);
-        return reject(err);
-      })
       .then(() => {
-        console.log(`Image ${file.name} downloaded to ${tempLocalFilename}.`);
+        return file.getMetadata();
+      })
+      .then((data) => {
+        originalMetadata = data[0].metadata || {};
+        console.log(`Got original file metadata: ${originalMetadata}`);
 
         return readImageDimensions(tempLocalFilename);
       })
@@ -305,17 +322,24 @@ function processFile(file) {
         console.log('at then() after readImageFeatures()', dimensions);
 
         return thumbnailize(file.name, tempLocalFilename,
-          dimensions.width, dimensions.height);
+          dimensions, originalMetadata);
       })
       .then(() => {
         console.log("All done!");
         resolve();
-      });
+      })
+      .catch((err) => {
+        console.error('Something went wrong!', err);
+        return reject(err);
+      })
   });
 }
 
 /**
  * Cloud Function for extracting thumbnail data out of incoming images.
+ *
+ * event.data.metageneration attribute is updated on metadata changes.
+ * On create value is 1. A value of > 1 indicates a metadata update.
  *
  * @param {object} event The Cloud Functions event.
  */
@@ -326,15 +350,31 @@ exports.thumbnails = function(event) {
     console.log(`File ${object.name} deleted.`);
     return Promise.resolve();
   } else if (object.metageneration === '1') {
-    // metageneration attribute is updated on metadata changes.
-    // on create value is 1
     console.log(`File ${object.name} uploaded.`);
     const file = gcs.bucket(object.bucket).file(object.name);
-    //return processFile(file);
 
     return processFile(file);
   } else {
     console.log(`File ${object.name} metadata updated.`);
+
+    //TODO remove this, debug only;
+    /*
+    const file = gcs.bucket(object.bucket).file(object.name);
+    //return getGcsFileMetadata(file);
+    return file.getMetadata()
+      .then((data) => {
+        let metadata = data[0].metadata;
+
+        console.log('Got metadata: ', metadata);
+
+        for (let key in metadata) {
+          console.log(` --> ${key} = ${metadata[key]}`);
+        }
+
+        return metadata;
+      });
+*/
+
     return Promise.resolve();
   }
 };
