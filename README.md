@@ -10,6 +10,17 @@ Note that the `exports.foo = ..` part is the function entry point. The exported 
 export STAGING_BUCKET=<your-staging-bucket>
 export INPUT_BUCKET=<your-input-bucket>
 export OUTPUT_BUCKET=<your-output-bucket>
+gcloud config set project <project-id>
+```
+
+## Create your buckets
+
+Obviously you only do this once:
+
+```sh
+gsutil mb -c regional -l europe-west1 gs://$INPUT_BUCKET
+gsutil mb -c regional -l europe-west1 gs://$OUTPUT_BUCKET
+gsutil mb -c regional -l europe-west1 gs://$STAGING_BUCKET
 ```
 
 ## Deploy the Cloud Function
@@ -27,5 +38,5 @@ gsutil cp <some-local-image-path> gs://$INPUT_BUCKET
 ## Reading the function logs
 
 ```sh
-gcloud beta functions logs read --limit 50
+gcloud beta functions logs read --limit 20
 ```

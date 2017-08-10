@@ -5,6 +5,7 @@ const path = require('path');
 const gcs = require('@google-cloud/storage')();
 const im = require('imagemagick');
 const uuidv4 = require('uuid/v4');
+const dc = require('dominant-color');
 
 // 'Pixel budget' denotes the maximum amount of pixels in the thumbnail
 const PIXEL_BUDGET = 50 * 50;
@@ -172,8 +173,8 @@ function extractThumbData(imageFilePath, width, height) {
       completeData.set(header);
       completeData.set(jpegData, header.length);
 
-      console.log('completeData len', completeData.length);
-      console.log(`completeData: ${completeData}`);
+      // console.log('completeData len', completeData.length);
+      // console.log(`completeData: ${completeData}`);
 
       resolve(completeData);
     });
@@ -185,20 +186,18 @@ function extractThumbData(imageFilePath, width, height) {
  *
  * @param originalFileName
  * @param thumbData
+ * @param originalMetadata
+ * @param dominantColor
  * @returns {Promise}
  */
-function storeThumbData(originalFileName, thumbData, originalMetadata) {
+function storeThumbData(originalFileName, thumbData, originalMetadata,
+                        dominantColor) {
   console.log(`Storing ${thumbData.length} bytes of thumbnail data`);
 
   return new Promise((resolve, reject) => {
     // Write the thumb data into a local file
     const tempDataFilename = `/tmp/${uuidv4()}`;
-
-    console.log(`thumbData: ${thumbData}`);
-    console.log('is it uint8array?', (thumbData instanceof Uint8Array));
-
     const dataBuffer = Buffer.from(thumbData.buffer);
-    console.log(`writing dataBuffer: ${dataBuffer}`);
 
     fs.writeFile(tempDataFilename, dataBuffer, (err) => {
       if (err) {
@@ -209,15 +208,11 @@ function storeThumbData(originalFileName, thumbData, originalMetadata) {
 
       // Create our set of metadata
       const metadata = {
-        dominantColor: '##TODO##' //TODO replace by real value
+        dominantColor: dominantColor
       };
 
       // Merge in the original file's metadata
       Object.assign(metadata, originalMetadata);
-
-      console.log(`Merged metadata for new file: ${metadata}`);
-
-      //TODO cant we do this in a smarter manner instead of this clumsy way?
 
       // Upload the thumb data to the output bucket
       uploadFile(tempDataFilename, originalFileName + ".thumbdata",
@@ -239,10 +234,11 @@ function storeThumbData(originalFileName, thumbData, originalMetadata) {
  * @param imageFilePath
  * @param dimensions
  * @param originalMetadata
+ * @param dominantColor
  * @returns {Promise}
  */
 function thumbnailize(originalFileName, imageFilePath,
-                      dimensions, originalMetadata) {
+                      dimensions, originalMetadata, dominantColor) {
   //console.log('originalFileName=', originalFileName);
 
   let thumbWidth = null;
@@ -271,7 +267,8 @@ function thumbnailize(originalFileName, imageFilePath,
     .then((thumbData) => {
       console.log('at then() after extractThumbData()');
 
-      return storeThumbData(originalFileName, thumbData, originalMetadata);
+      return storeThumbData(originalFileName, thumbData, originalMetadata,
+        dominantColor);
     });
 };
 
@@ -293,6 +290,20 @@ function readImageDimensions(imageFilePath) {
   });
 }
 
+function getDominantColor(imageFilePath) {
+  return new Promise((resolve, reject) => {
+    dc(imageFilePath, (err, color) => {
+      if (err) {
+        return reject(err);
+      }
+
+      console.log('Got dominant color: ', color);
+
+      resolve(color);
+    });
+  });
+};
+
 /**
  * Processes the given input file.
  *
@@ -306,10 +317,15 @@ function processFile(file) {
     // Form a local path for the file
     const tempLocalFilename = `/tmp/${uuidv4()}`;
     let originalMetadata = null;
+    let dominantColor = null;
 
     // Download file from bucket.
     file.download({destination: tempLocalFilename})
       .then(() => {
+        return getDominantColor(tempLocalFilename);
+      })
+      .then((color) => {
+        dominantColor = color;
         return file.getMetadata();
       })
       .then((data) => {
@@ -322,7 +338,7 @@ function processFile(file) {
         console.log('at then() after readImageFeatures()', dimensions);
 
         return thumbnailize(file.name, tempLocalFilename,
-          dimensions, originalMetadata);
+          dimensions, originalMetadata, dominantColor);
       })
       .then(() => {
         console.log("All done!");
