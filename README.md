@@ -9,8 +9,15 @@ Note that the `exports.foo = ..` part is the function entry point. The exported 
 ```sh
 export STAGING_BUCKET=<your-staging-bucket>
 export INPUT_BUCKET=<your-input-bucket>
-export OUTPUT_BUCKET=<your-output-bucket>
 gcloud config set project <project-id>
+```
+
+## config.js
+
+You must create a file in the main directory with the name `config.js` with the following contents:
+
+```sh
+exports.OUTPUT_BUCKET = '<your-output-gcs-bucket>';
 ```
 
 ## Create your buckets

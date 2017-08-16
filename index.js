@@ -35,12 +35,10 @@ const gcs = require('@google-cloud/storage')();
 const im = require('imagemagick');
 const uuidv4 = require('uuid/v4');
 const dc = require('dominant-color');
+const config = require('./config');
 
 // 'Pixel budget' denotes the maximum amount of pixels in the thumbnail
 const PIXEL_BUDGET = 50 * 50;
-
-// Our output bucket
-const OUTPUT_BUCKET = 'qvik-gcf-thumbnails-output';
 
 /**
  * Extracts image dimensions.
@@ -89,7 +87,7 @@ function getDominantColor(imageFilePath) {
  */
 function uploadFile(srcFilePath, dstFilePath, contentType, metadata) {
   return new Promise((resolve, reject) => {
-    const bucket = gcs.bucket(OUTPUT_BUCKET);
+    const bucket = gcs.bucket(config.OUTPUT_BUCKET);
     const uploadOptions = {
       destination: dstFilePath,
       metadata: {

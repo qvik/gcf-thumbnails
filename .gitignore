@@ -1,2 +1,4 @@
 .idea
 .DS_Store
+setenv.sh
+config.js
