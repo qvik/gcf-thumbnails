@@ -1,4 +1,33 @@
-"use strict";
+/**
+ * This is a Node.js / Cloud Function implementation of
+ * 'JPEG preview thumbnails' used nowadays by most quality UI applications
+ * on the market.
+ *
+ * For an idea how this works, please see https://goo.gl/vuf9xG
+ *
+ * Released under the MIT license:
+ *
+ * Copyright 2015-2017 QVIK
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a
+ * copy of this software and associated documentation files (the "Software"),
+ * to deal in the Software without restriction, including without limitation
+ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
+ * and/or sell copies of the Software, and to permit persons to whom the
+ * Software is furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+ * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
+ * IN THE SOFTWARE.
+ */
+'use strict';
 
 const fs = require('fs');
 const path = require('path');
@@ -14,6 +43,42 @@ const PIXEL_BUDGET = 50 * 50;
 const OUTPUT_BUCKET = 'qvik-gcf-thumbnails-output';
 
 /**
+ * Extracts image dimensions.
+ *
+ * @param imageFilePath
+ * @returns {Promise}
+ */
+function readImageDimensions(imageFilePath) {
+  return new Promise((resolve, reject) => {
+    im.identify(imageFilePath, (err, features) => {
+      if (err) {
+        return reject(err);
+      }
+
+      resolve({width: features.width, height: features.height});
+    });
+  });
+}
+
+/**
+ * Extracts the image's dominant color.
+ *
+ * @param imageFilePath
+ * @returns {Promise}
+ */
+function getDominantColor(imageFilePath) {
+  return new Promise((resolve, reject) => {
+    dc(imageFilePath, (err, color) => {
+      if (err) {
+        return reject(err);
+      }
+
+      resolve(color);
+    });
+  });
+}
+
+/**
  * Uploads a local file into a GCS bucket.
  *
  * @param srcFilePath Local filesystem path of the file to upload
@@ -23,8 +88,6 @@ const OUTPUT_BUCKET = 'qvik-gcf-thumbnails-output';
  * @returns {Promise}
  */
 function uploadFile(srcFilePath, dstFilePath, contentType, metadata) {
-  console.log('uploading file to', dstFilePath);
-
   return new Promise((resolve, reject) => {
     const bucket = gcs.bucket(OUTPUT_BUCKET);
     const uploadOptions = {
@@ -55,54 +118,38 @@ function uploadFile(srcFilePath, dstFilePath, contentType, metadata) {
  * @param height
  * @returns {Promise}
  */
-function downscaleImage(imageFilePath, width, height) {
-  console.log('Downscaling image: ', imageFilePath);
-
+function convertImage(imageFilePath, width, height) {
   return new Promise((resolve, reject) => {
-    // Calculate the size of the thumbnail
+    // Calculate the size of the thumbnail from the size of the original
+    // image and the 'pixel budget'
     const origPixels = width * height;
     const ratio = Math.sqrt(PIXEL_BUDGET / origPixels);
-    console.log('pixel ratio', ratio);
     const thumbWidth = Math.round(ratio * width);
     const thumbHeight = Math.round(ratio * height);
-    console.log('thumb size', thumbWidth, thumbHeight);
 
-    im.resize({
-      srcPath: imageFilePath,
-      dstPath: imageFilePath,
-      quality: 0.3,
-      format: 'jpg',
-      width: thumbWidth,
-      height: thumbHeight
-    }, (err) => {
+    // Downscale the image to a thumbnail and store it with a lower quality
+    // as a JPEG without optimizing the header's Huffman color coding tables
+    // to allow for interchangeable header; also strip any comments and such
+    // for small binary size.
+    const params = [
+      imageFilePath,
+      '-define', 'jpeg:optimize-coding=false',
+      '-compress', 'JPEG',
+      '-strip',
+      '-quality', 30,
+      '-resize', `${thumbWidth}x${thumbHeight}`,
+      imageFilePath
+    ];
+
+    console.log(`Calling convert with params: ${params.join(' ')}`);
+
+    im.convert(params, (err) => {
       if (err) {
         return reject(err);
       }
 
-      resolve({thumbWidth: thumbWidth, thumbHeight: thumbHeight});
+      resolve({width: thumbWidth, height: thumbHeight});
     });
-  });
-}
-
-/**
- * Blurs the given image.
- *
- * @param imageFilePath
- * @returns {Promise}
- */
-function blurImage(imageFilePath) {
-  console.log('blurring image: ', imageFilePath);
-
-  return new Promise((resolve, reject) => {
-    im.convert([imageFilePath, '-gaussian-blur', 5, imageFilePath], (err) => {
-        if (err) {
-          return reject(err);
-        }
-
-        console.log('Image blurred OK!');
-
-        resolve();
-      });
   });
 }
 
@@ -132,7 +179,20 @@ function findMarker(marker, startIndex, data) {
   return null;
 }
 
-function extractThumbData(imageFilePath, width, height) {
+/**
+ * Locates the JPEG data part in the thumbnailized image, extracts it
+ * and glues our custom 4-byte header to it and returns the combined byte
+ * array.
+ *
+ * @param imageFilePath
+ * @param dimensions
+ * @returns {*}
+ */
+function extractThumbData(imageFilePath, dimensions) {
+  if (!dimensions || !dimensions.width || !dimensions.height) {
+    return Promise.reject(new Error("Invalid thumb dimensions"));
+  }
+
   return new Promise((resolve, reject) => {
     // Read the file into a Uint8Array
     fs.readFile(imageFilePath, (err, data) => {
@@ -157,24 +217,18 @@ function extractThumbData(imageFilePath, width, height) {
         return reject(new Error('EOI marker not found'));
       }
 
-      console.log(`sosIndex: ${sosIndex}, eoiIndex: ${eoiIndex}`);
-
       // JPEG image data is everything between these markers; grab it
       const dataStartIndex = sosIndex + 2;
       const jpegData = buffer.slice(dataStartIndex, eoiIndex);
-      console.log(`Got ${jpegData.length} bytes of jpegData`);
 
       // Create our custom 4-byte header
-      const header = new Uint8Array([0x01, 0x01, width, height]);
-      console.log(`${header.length} bytes of header constructed.`);
+      const header = new Uint8Array([0x01, 0x01,
+        dimensions.width, dimensions.height]);
 
       // Combine the header + JPEG data
       const completeData = new Uint8Array(header.length + jpegData.length);
       completeData.set(header);
       completeData.set(jpegData, header.length);
-
-      // console.log('completeData len', completeData.length);
-      // console.log(`completeData: ${completeData}`);
 
       resolve(completeData);
     });
@@ -203,8 +257,6 @@ function storeThumbData(originalFileName, thumbData, originalMetadata,
       if (err) {
         return reject(err);
       }
-
-      console.log('Thumb data written into a file OK!');
 
       // Create our set of metadata
       const metadata = {
@@ -239,69 +291,21 @@ function storeThumbData(originalFileName, thumbData, originalMetadata,
  */
 function thumbnailize(originalFileName, imageFilePath,
                       dimensions, originalMetadata, dominantColor) {
-  //console.log('originalFileName=', originalFileName);
-
-  let thumbWidth = null;
-  let thumbHeight = null;
-
-  return downscaleImage(imageFilePath, dimensions.width, dimensions.height)
+  return convertImage(imageFilePath, dimensions.width, dimensions.height)
     .then((result) => {
-      console.log('at then() after downscaleImage()');
-
-      thumbWidth = result.thumbWidth;
-      thumbHeight = result.thumbHeight;
-
-      //TODO remove, this is just debug
-      //uploadFile(imageFilePath, originalFileName, 'image/jpeg');
-
-      return blurImage(imageFilePath);
+      // Extract the final thumbnail dimensions, as these will be decided
+      // by ImageMagick to retain optimal aspect ratio
+      return readImageDimensions(imageFilePath);
     })
-    .then(() => {
-      console.log('at then() after blurImage');
+    .then((dimensions) => {
+      console.log(`Final thumbnail dimensions are: ${dimensions}`);
 
-      //TODO remove, this is just debug
-      //uploadFile(imageFilePath, 'blurred-' + originalFileName, 'image/jpeg');
-
-      return extractThumbData(imageFilePath, thumbWidth, thumbHeight);
+      return extractThumbData(imageFilePath, dimensions);
     })
     .then((thumbData) => {
-      console.log('at then() after extractThumbData()');
-
       return storeThumbData(originalFileName, thumbData, originalMetadata,
         dominantColor);
     });
-};
-
-/**
- * Extracts image dimensions.
- *
- * @param imageFilePath
- * @returns {Promise}
- */
-function readImageDimensions(imageFilePath) {
-  return new Promise((resolve, reject) => {
-    im.identify(imageFilePath, (err, features) => {
-      if (err) {
-        return reject(err);
-      }
-
-      resolve({width: features.width, height: features.height});
-    });
-  });
-}
-
-function getDominantColor(imageFilePath) {
-  return new Promise((resolve, reject) => {
-    dc(imageFilePath, (err, color) => {
-      if (err) {
-        return reject(err);
-      }
-
-      console.log('Got dominant color: ', color);
-
-      resolve(color);
-    });
-  });
 };
 
 /**
@@ -311,7 +315,7 @@ function getDominantColor(imageFilePath) {
  * @returns {Promise}
  */
 function processFile(file) {
-  console.log('Processing input file:', file.name);
+  console.log(`Processing file '${file.name}..`);
 
   return new Promise((resolve, reject) => {
     // Form a local path for the file
@@ -335,8 +339,6 @@ function processFile(file) {
         return readImageDimensions(tempLocalFilename);
       })
       .then((dimensions) => {
-        console.log('at then() after readImageFeatures()', dimensions);
-
         return thumbnailize(file.name, tempLocalFilename,
           dimensions, originalMetadata, dominantColor);
       })
@@ -372,25 +374,6 @@ exports.thumbnails = function(event) {
     return processFile(file);
   } else {
     console.log(`File ${object.name} metadata updated.`);
-
-    //TODO remove this, debug only;
-    /*
-    const file = gcs.bucket(object.bucket).file(object.name);
-    //return getGcsFileMetadata(file);
-    return file.getMetadata()
-      .then((data) => {
-        let metadata = data[0].metadata;
-
-        console.log('Got metadata: ', metadata);
-
-        for (let key in metadata) {
-          console.log(` --> ${key} = ${metadata[key]}`);
-        }
-
-        return metadata;
-      });
-*/
-
     return Promise.resolve();
   }
 };
