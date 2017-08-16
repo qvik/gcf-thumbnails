@@ -18,7 +18,7 @@ gcloud config set project <project-id>
 You must create a file in the main directory with the name `config.js` with the following contents:
 
 ```sh
-exports.OUTPUT_BUCKET = '<your-output-gcs-bucket>';
+exports.OUTPUT_BUCKET = '<your-output-bucket>';
 ```
 
 ## Create your buckets
