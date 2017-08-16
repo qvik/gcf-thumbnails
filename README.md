@@ -9,6 +9,7 @@ Note that the `exports.foo = ..` part is the function entry point. The exported 
 ```sh
 export STAGING_BUCKET=<your-staging-bucket>
 export INPUT_BUCKET=<your-input-bucket>
+export OUTPUT_BUCKET=<your-output-bucket>
 gcloud config set project <project-id>
 ```
 
