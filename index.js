@@ -1,7 +1,7 @@
 /**
  * This is a Node.js / Cloud Function implementation of
- * 'JPEG preview thumbnails' used nowadays by most quality UI applications
- * on the market.
+ * 'JPEG preview thumbnails' used nowadays by many quality mobile / web
+ * applications on the market.
  *
  * For an idea how this works, please see https://goo.gl/vuf9xG
  *

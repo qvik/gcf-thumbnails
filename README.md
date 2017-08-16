@@ -1,8 +1,14 @@
 # Google Cloud Function for Thumbnailization
 
-This is a Google Cloud Function for creating JPEG thumbnail data out of uploaded images. Any image stored in the input bucket is processed, a thumbnail data (= a downscaled, blurred JPEG with the header removed) is written to the output bucket.
+This is a Node.js / Cloud Function implementation of 'JPEG preview thumbnails' technology used nowadays by many quality mobile / web applications on the market.
+
+For an idea how this technology works, please see [https://goo.gl/vuf9xG](https://goo.gl/vuf9xG)
+
+This function tracks a Google Cloud Storage bucket and any image stored in the  bucket is processed and the extracted thumbnail data is written to the output bucket as a file. The service using the thumbnails can similarly track the output bucket for the thumbnail data files and update their data storage objects accordingly. In addition to the thumbnail generation, the dominant color of the image is written to the output GCS file as an attribute `dominantColor` whose value is the color as a hex string.
 
 Note that the `exports.foo = ..` part is the function entry point. The exported name must match with the name specified in the `gcloud beta functions deploy` command.
+
+Released under the MIT license.
 
 ## Set up your environment
 
